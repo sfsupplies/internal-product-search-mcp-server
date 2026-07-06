@@ -1,0 +1,16 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+mcp = ">=1.0.0"
+httpx = ">=0.27.0"
+starlette = "*"
+uvicorn = "*"
+product-search-mcp-server = {path = ".", editable = true}
+
+[dev-packages]
+
+[requires]
+python_version = "3.14"

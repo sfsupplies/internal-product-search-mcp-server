@@ -1,0 +1,32 @@
+# Production deployment: the product-search MCP server only, calling the
+# existing SF Supplies search API over Streamable HTTP, bearer-token protected.
+#
+#   cp .env.deploy.example .env.deploy   # then fill in the token
+#   docker compose -f docker-compose.deploy.yml up -d --build
+#
+# Consumers connect to:  http://<this-host>:8000/mcp   with header
+#   Authorization: Bearer <MCP_AUTH_TOKEN>
+#
+# Secrets are loaded via `env_file` so their values go straight into the
+# container WITHOUT YAML interpolation (tokens often contain `$`, which compose
+# would otherwise try to expand).
+
+services:
+  mcp_server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: product-search-mcp-server:latest
+    restart: unless-stopped
+    # Loaded literally into the container env (no interpolation):
+    #   MCP_AUTH_TOKEN, and optional SEARCH_API_URL / PRODUCT_URL_TEMPLATE /
+    #   BIND_ADDR / HOST_PORT.
+    env_file:
+      - .env.deploy
+    environment:
+      # Fixed operational settings (override anything from env_file).
+      MCP_TRANSPORT: http
+      MCP_HTTP_HOST: 0.0.0.0
+      MCP_HTTP_PORT: "8000"
+    ports:
+      - "${BIND_ADDR:-0.0.0.0}:${HOST_PORT:-8000}:8000"

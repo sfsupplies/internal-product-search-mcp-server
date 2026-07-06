@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+.env
+.env.deploy
+.env.deploy.bak
+
+# Generated at deploy time by the GitHub Actions workflow (from the Pipfile).
+requirements.txt

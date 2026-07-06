@@ -1,0 +1,88 @@
+# Build and deploy the product-search MCP server to Azure App Service.
+# Pure-Python code deploy (no Docker): the repo root is deployed as source and
+# Azure's Oryx build installs it. Mirrors the internal-chatbot deploy.
+#
+# ── FIRST-TIME SETUP (do this once, in order) ────────────────────────────────
+#   1. Create an Azure Web App (Linux, Python >=3.11) in the SF Cloud account.
+#   2. On that Web App, run Deployment Center with source = GitHub and
+#      Authentication = "User-assigned identity" (OIDC). This creates three repo
+#      secrets  AZUREAPPSERVICE_CLIENTID_<hash> / TENANTID_<hash> /
+#      SUBSCRIPTIONID_<hash>  and a federated credential. Copy their EXACT names
+#      into the azure/login step below (replace the <hash> placeholders).
+#   3. If step 2 committed its own workflow file, delete it and keep this one.
+#   4. Set AZURE_WEBAPP_NAME below to the Web App's real name (and, optionally,
+#      rename this file to main_<appname>.yml to match Azure's convention).
+#   5. Add these Application settings on the Web App (Configuration):
+#        SCM_DO_BUILD_DURING_DEPLOYMENT = true
+#        MCP_TRANSPORT   = http
+#        MCP_HTTP_HOST   = 0.0.0.0
+#        MCP_HTTP_PORT   = 8000          # App Service routes to 8000 by default
+#        MCP_AUTH_TOKEN  = <openssl rand -hex 32>   # clients send Bearer <token>
+#      Optional overrides (defaults are baked in): SEARCH_API_URL,
+#      SUGGEST_API_URL, PRODUCT_URL_TEMPLATE, SEARCH_API_TIMEOUT.
+#      Never set MCP_DISABLE_AUTH on a public deployment.
+#
+# NOTE: hosting this on Azure makes the MCP endpoint PUBLIC (was LAN-only). The
+# bearer token is then the whole boundary — keep it strong and rotate it. TLS is
+# provided by App Service. Point the chatbot's PRODUCT_MCP_URL at the https URL.
+
+name: Build and deploy Python app to Azure Web App - sfproductsearch
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  id-token: write        # required for OIDC federated login
+  contents: read         # required for actions/checkout
+
+env:
+  AZURE_WEBAPP_NAME: sfproductsearch     # <-- set to your Azure Web App name
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # --- Export requirements.txt from the Pipfile, then drop the Pipfile ---
+      # Oryx prefers a Pipfile and takes a pipenv path that leaves the packaged
+      # virtualenv empty (-> "No module named ..." on boot). Export a pinned
+      # requirements.txt, then delete the Pipfile so Oryx uses plain
+      # `pip install -r requirements.txt`. The repo keeps the Pipfile untouched.
+      #
+      # The self-package exports as "-e ." (editable). Oryx builds in one temp
+      # dir and runs from another, so an editable install's path would dangle at
+      # runtime. Rewrite it to a plain "." so pip copies the built package into
+      # site-packages (path-independent) and `python -m ...` resolves at runtime.
+      - name: Export requirements.txt and remove Pipfile from the package
+        run: |
+          python -m pip install --upgrade pipenv
+          pipenv requirements > requirements.txt
+          sed -i 's/^-e \.$/./' requirements.txt
+          rm -f Pipfile Pipfile.lock
+
+      # --- Authenticate to Azure via OIDC ---
+      # Replace the <hash> suffixes with the exact secret names created by
+      # Deployment Center (Settings > Secrets and variables > Actions).
+      - name: Log in to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_<hash> }}
+          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_<hash> }}
+          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_<hash> }}
+
+      # --- Deploy the repo (pyproject.toml + src/) as source ---
+      - name: Deploy to Azure Web App
+        uses: azure/webapps-deploy@v3
+        id: deploy-to-webapp
+        with:
+          app-name: ${{ env.AZURE_WEBAPP_NAME }}
+          slot-name: 'Production'
+          package: .
+          # The server starts uvicorn itself when MCP_TRANSPORT=http, binding
+          # MCP_HTTP_HOST:MCP_HTTP_PORT (set as app settings above).
+          startup-command: 'python -m product_search_mcp_server'
