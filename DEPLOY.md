@@ -50,19 +50,17 @@ healthcheck. Logs: `docker compose -f docker-compose.deploy.yml logs -f`.
 
 Instead of the LAN VM, this server can run on **Azure App Service** as a public
 HTTPS endpoint — the same code-deploy pattern as the internal-chatbot (no Docker;
-Azure's Oryx build installs the package). The pipeline is
-[.github/workflows/main_sfproductsearch.yml](.github/workflows/main_sfproductsearch.yml);
-its header has the full first-time setup.
+Azure's Oryx build installs the package). App name **`product-search-mcp-server`**
+in the **SF Cloud** account; pipeline is
+[.github/workflows/main_product-search-mcp-server.yml](.github/workflows/main_product-search-mcp-server.yml).
 
-Summary:
-1. Create a Linux **Python (≥3.11)** Web App in the **SF Cloud** account.
-2. Run **Deployment Center → GitHub → User-assigned identity (OIDC)**; it creates
-   the `AZUREAPPSERVICE_*` repo secrets. Copy their exact names into the
-   `azure/login` step and set `AZURE_WEBAPP_NAME`.
-3. Add **Application settings**: `SCM_DO_BUILD_DURING_DEPLOYMENT=true`,
+Setup (mostly done — OIDC + secrets were created by Deployment Center):
+1. Linux **Python (≥3.11)** Web App, GitHub deploy via **User-assigned identity
+   (OIDC)** — the `AZUREAPPSERVICE_*` secrets are already wired into the workflow.
+2. Add **Application settings** on the Web App: `SCM_DO_BUILD_DURING_DEPLOYMENT=true`,
    `MCP_TRANSPORT=http`, `MCP_HTTP_HOST=0.0.0.0`, `MCP_HTTP_PORT=8000`,
    `MCP_AUTH_TOKEN=<token>` (plus any optional overrides from §"configuration").
-4. Push to `main`. Startup command is `python -m product_search_mcp_server`.
+3. Push to `main` → builds and deploys. Startup is `python -m product_search_mcp_server`.
 
 The workflow exports a `requirements.txt` from the Pipfile and **removes the
 Pipfile from the deployed copy** so Oryx installs via `pip` (a Pipfile makes Oryx

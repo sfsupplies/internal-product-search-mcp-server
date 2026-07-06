@@ -1,6 +1,20 @@
-# Docs for the Azure Web Apps Deploy action: https://github.com/Azure/webapps-deploy
-# More GitHub Actions for Azure: https://github.com/Azure/actions
-# More info on Python, GitHub Actions, and Azure App Service: https://aka.ms/python-webapps-actions
+# Build and deploy the product-search MCP server to Azure App Service.
+# Pure-Python code deploy (no Docker): the repo root is deployed as source and
+# Azure's Oryx build installs it. Mirrors the internal-chatbot deploy.
+# Auth: OIDC federated login (secrets created by Deployment Center).
+#
+# Application settings to configure on the Web App (Configuration):
+#   SCM_DO_BUILD_DURING_DEPLOYMENT = true
+#   MCP_TRANSPORT   = http
+#   MCP_HTTP_HOST   = 0.0.0.0
+#   MCP_HTTP_PORT   = 8000          # App Service routes to 8000 by default
+#   MCP_AUTH_TOKEN  = <openssl rand -hex 32>   # clients send Bearer <token>
+# Optional overrides (defaults are baked in): SEARCH_API_URL, SUGGEST_API_URL,
+#   PRODUCT_URL_TEMPLATE, SEARCH_API_TIMEOUT. Never set MCP_DISABLE_AUTH here.
+#
+# NOTE: hosting this on Azure makes the MCP endpoint PUBLIC (was LAN-only). The
+# bearer token is then the whole boundary — keep it strong and rotate it. TLS is
+# provided by App Service. Point the chatbot's PRODUCT_MCP_URL at the https URL.
 
 name: Build and deploy Python app to Azure Web App - product-search-mcp-server
 
@@ -10,67 +24,53 @@ on:
       - main
   workflow_dispatch:
 
+permissions:
+  id-token: write        # required for OIDC federated login
+  contents: read         # required for actions/checkout
+
+env:
+  AZURE_WEBAPP_NAME: product-search-mcp-server
+
 jobs:
-  build:
+  build-and-deploy:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read #This is required for actions/checkout
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python version
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.14'
-
-      # 🛠️ Local Build Section (Optional)
-      # The following section in your workflow is designed to catch build issues early on the client side, before deployment. This can be helpful for debugging and validation. However, if this step significantly increases deployment time and early detection is not critical for your workflow, you may remove this section to streamline the deployment process.
-      - name: Create and Start virtual environment and Install dependencies
+      # --- Export requirements.txt from the Pipfile, then drop the Pipfile ---
+      # Oryx prefers a Pipfile and takes a pipenv path that leaves the packaged
+      # virtualenv empty (-> "No module named ..." on boot). Export a pinned
+      # requirements.txt, then delete the Pipfile so Oryx uses plain
+      # `pip install -r requirements.txt`. The repo keeps the Pipfile untouched.
+      #
+      # The self-package exports as "-e ." (editable). Oryx builds in one temp
+      # dir and runs from another, so an editable install's path would dangle at
+      # runtime. Rewrite it to a plain "." so pip copies the built package into
+      # site-packages (path-independent) and `python -m ...` resolves at runtime.
+      - name: Export requirements.txt and remove Pipfile from the package
         run: |
-          python -m venv antenv
-          source antenv/bin/activate
-          pip install -r requirements.txt
-                
-      # By default, when you enable GitHub CI/CD integration through the Azure portal, the platform automatically sets the SCM_DO_BUILD_DURING_DEPLOYMENT application setting to true. This triggers the use of Oryx, a build engine that handles application compilation and dependency installation (e.g., pip install) directly on the platform during deployment. Hence, we exclude the antenv virtual environment directory from the deployment artifact to reduce the payload size. 
-      - name: Upload artifact for deployment jobs
-        uses: actions/upload-artifact@v4
-        with:
-          name: python-app
-          path: |
-            .
-            !antenv/
+          python -m pip install --upgrade pipenv
+          pipenv requirements > requirements.txt
+          sed -i 's/^-e \.$/./' requirements.txt
+          rm -f Pipfile Pipfile.lock
 
-      # 🚫 Opting Out of Oryx Build
-      # If you prefer to disable the Oryx build process during deployment, follow these steps:
-      # 1. Remove the SCM_DO_BUILD_DURING_DEPLOYMENT app setting from your Azure App Service Environment variables.
-      # 2. Refer to sample workflows for alternative deployment strategies: https://github.com/Azure/actions-workflow-samples/tree/master/AppService
-      
-
-  deploy:
-    runs-on: ubuntu-latest
-    needs: build
-    permissions:
-      id-token: write #This is required for requesting the JWT
-      contents: read #This is required for actions/checkout
-
-    steps:
-      - name: Download artifact from build job
-        uses: actions/download-artifact@v4
-        with:
-          name: python-app
-      
-      - name: Login to Azure
+      # --- Authenticate to Azure via OIDC (secrets from Deployment Center) ---
+      - name: Log in to Azure
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_07C38205C2D4445CB9FA195012E6CF41 }}
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_FA64ADED6B184539AC00E0697688F73F }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_867140255A4746CC807007739665DFF9 }}
 
-      - name: 'Deploy to Azure Web App'
+      # --- Deploy the repo (pyproject.toml + src/) as source ---
+      - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3
         id: deploy-to-webapp
         with:
-          app-name: 'product-search-mcp-server'
+          app-name: ${{ env.AZURE_WEBAPP_NAME }}
           slot-name: 'Production'
-          
+          package: .
+          # The server starts uvicorn itself when MCP_TRANSPORT=http, binding
+          # MCP_HTTP_HOST:MCP_HTTP_PORT (set as app settings above).
+          startup-command: 'python -m product_search_mcp_server'
